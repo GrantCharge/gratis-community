@@ -3,9 +3,15 @@ import {withMemoryContext} from './memory-context.mjs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { streamClaudeReply } from './claude-backend.mjs';
 import { streamCodexReply } from './codex-backend.mjs';
+import { customModelId, authHeaders } from './custom-providers.mjs';
+
+// The desktop registers how to look up a custom provider (address and decrypted key) by id.
+let customProviderLookup = null;
+export function setCustomProviderLookup(lookup) { customProviderLookup = lookup; }
+const PROVIDER_ID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 
 export function validateSettings(value) {
-  if (!value || !['demo', 'local', 'claude', 'codex'].includes(value.provider)) throw new Error('Choose Claude, Codex, local AI, or the demo provider.');
+  if (!value || !['demo', 'local', 'claude', 'codex', 'custom'].includes(value.provider)) throw new Error('Choose Claude, Codex, a custom provider, local AI, or the demo provider.');
   if (value.profileAvatarDataUrl !== undefined && value.profileAvatarDataUrl !== null && (typeof value.profileAvatarDataUrl !== 'string' || value.profileAvatarDataUrl.length > 2_000_000 || !/^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(value.profileAvatarDataUrl))) throw new Error('Profile photo must be a PNG image.');
   if (value.displayName !== undefined && (typeof value.displayName !== 'string' || value.displayName.length > 80)) throw new Error('Your name must be text under 80 characters.');
   if (typeof value.baseUrl !== 'string' || typeof value.model !== 'string') throw new Error('Backend URL and model must be text.');
@@ -16,10 +22,11 @@ export function validateSettings(value) {
   if (value.provider === 'local' && !value.model.trim()) throw new Error('Enter a model already installed in your local AI server.');
   if (value.provider === 'claude' && !['sonnet', 'haiku', 'opus'].includes(value.model)) throw new Error('Choose a Claude model: Sonnet, Haiku, or Opus.');
   if(value.provider==='codex'&&!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,199}$/.test(value.model))throw new Error('Choose a Codex model from your account.');
+  if (value.provider === 'custom' && (!PROVIDER_ID.test(value.customProviderId || '') || !customModelId(value.model.trim()))) throw new Error('Choose a custom provider and one of its models.');
   if (value.effort !== undefined && !['minimal','low', 'medium', 'high','xhigh','max','ultra','persistent'].includes(value.effort)) throw new Error('Choose low, medium, or high response effort.');
   if (value.voiceCleanup !== undefined && typeof value.voiceCleanup !== 'boolean') throw new Error('Choose whether to use Haiku transcript cleanup.');
   if (value.voiceLanguage !== undefined && !['en', 'auto'].includes(value.voiceLanguage)) throw new Error('Choose English or automatic language detection.');
-  return { ...(value.appearance!==undefined?{appearance:appearanceSetting(value.appearance)}:{}), profileAvatarDataUrl: value.profileAvatarDataUrl ?? null, displayName: value.displayName?.trim() || '', provider: value.provider, baseUrl: url.href.replace(/\/+$/, ''), model: value.model.trim(), effort: value.effort || 'medium', voiceCleanup: value.voiceCleanup !== false, voiceLanguage: value.voiceLanguage || 'en' };
+  return { ...(value.appearance!==undefined?{appearance:appearanceSetting(value.appearance)}:{}), profileAvatarDataUrl: value.profileAvatarDataUrl ?? null, displayName: value.displayName?.trim() || '', provider: value.provider, baseUrl: url.href.replace(/\/+$/, ''), model: value.model.trim(), effort: value.effort || 'medium', voiceCleanup: value.voiceCleanup !== false, voiceLanguage: value.voiceLanguage || 'en', ...(value.provider === 'custom' ? { customProviderId: value.customProviderId } : {}) };
 }
 
 async function* demoReply({ bot, messages, signal }) {
@@ -29,13 +36,13 @@ async function* demoReply({ bot, messages, signal }) {
   for (const part of response.match(/\S+\s*/g) ?? []) { await delay(10, undefined, { signal }); yield part; }
 }
 
-function readDelta(payload) {
-  if (payload.error) throw new Error(typeof payload.error.message === 'string' ? payload.error.message : 'Local backend returned an error.');
-  if (!Array.isArray(payload.choices)) throw new Error('Local backend returned an invalid chat response.');
+function readDelta(payload, label = 'Local backend') {
+  if (payload.error) throw new Error(typeof payload.error.message === 'string' ? payload.error.message.slice(0, 500) : `${label} returned an error.`);
+  if (!Array.isArray(payload.choices)) throw new Error(`${label} returned an invalid chat response.`);
   const choice = payload.choices[0];
   if (!choice) return '';
   const content = choice.delta?.content ?? choice.message?.content;
-  if (content !== undefined && content !== null && typeof content !== 'string') throw new Error('Local backend returned non-text content.');
+  if (content !== undefined && content !== null && typeof content !== 'string') throw new Error(`${label} returned non-text content.`);
   return content ?? '';
 }
 
@@ -44,32 +51,48 @@ export async function* streamReply({ settings, bot, messages, signal, ...context
   if (settings.provider === 'demo') { yield* demoReply({ bot, messages, signal }); return; }
   if (settings.provider === 'claude') { yield* streamClaudeReply({ settings, bot, messages, signal, ...context }); return; }
   if (settings.provider === 'codex') { yield* streamCodexReply({settings,bot,messages,signal,...context}); return; }
+  if (settings.provider === 'custom') {
+    if (!customProviderLookup) throw new Error('Custom providers are not available here.');
+    const provider = customProviderLookup(settings.customProviderId);
+    yield* streamOpenAI({ url: `${provider.baseUrl}/chat/completions`, headers: authHeaders(provider), label: provider.label, model: settings.model, bot, messages, signal, context, idleSeconds: 90 });
+    return;
+  }
+  yield* streamOpenAI({ url: `${settings.baseUrl}/chat/completions`, headers: {}, label: 'Local backend', model: settings.model, bot, messages, signal, context, idleSeconds: 30 });
+}
+
+// OpenAI-style chat completions. The timeout restarts whenever data arrives, so long
+// answers keep streaming while a silent server still fails.
+async function* streamOpenAI({ url, headers, label, model, bot, messages, signal, context, idleSeconds }) {
   const controller = new AbortController();
   const abort = () => controller.abort(signal.reason);
   if (signal.aborted) abort(); else signal.addEventListener('abort', abort, { once: true });
-  let timedOut = false;
-  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, 30_000);
-  timer.unref?.();
+  let timedOut = false, timer = null;
+  const arm = () => { clearTimeout(timer); timer = setTimeout(() => { timedOut = true; controller.abort(); }, idleSeconds * 1000); timer.unref?.(); };
+  arm();
   try {
-    const response = await fetch(`${settings.baseUrl}/chat/completions`, {
+    const response = await fetch(url, {
       method: 'POST', redirect: 'error', signal: controller.signal,
-      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream, application/json' },
-      body: JSON.stringify({ model: settings.model, stream: true, messages: [{ role: 'system', content: bot.instructions }, ...messages.map(({ role, content },i) => ({ role, content:i===messages.length-1?withMemoryContext(content,context.turnContext):content }))] })
+      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream, application/json', ...headers },
+      body: JSON.stringify({ model, stream: true, messages: [{ role: 'system', content: bot.instructions }, ...messages.map(({ role, content },i) => ({ role, content:i===messages.length-1?withMemoryContext(content,context.turnContext):content }))] })
     });
-    if (!response.ok) throw new Error(`Local backend returned HTTP ${response.status}. Check its model name and server status.`);
+    if (response.status === 401 || response.status === 403) throw new Error(`${label} rejected the API key. Update it in Settings.`);
+    if (response.status === 429) throw new Error(`${label} is rate limiting requests. Wait a moment or choose another model.`);
+    if (!response.ok) throw new Error(`${label} returned HTTP ${response.status}. Check its model name and server status.`);
+    arm();
     const contentType = response.headers.get('content-type') ?? '';
     if (contentType.includes('application/json')) {
-      const content = readDelta(await response.json());
-      if (!content) throw new Error('Local backend returned an empty response.');
+      const content = readDelta(await response.json(), label);
+      if (!content) throw new Error(`${label} returned an empty response.`);
       yield content; return;
     }
-    if (!contentType.includes('text/event-stream') || !response.body) throw new Error('Local backend must return a chat JSON response or an SSE stream.');
+    if (!contentType.includes('text/event-stream') || !response.body) throw new Error(`${label} must return a chat JSON response or an SSE stream.`);
     let buffer = '', gotText = false, finished = false;
     const decoder = new TextDecoder();
     const reader = response.body.getReader();
     try {
       while (!finished) {
         const { value, done } = await reader.read();
+        arm();
         buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
         // SSE lines are accumulated before parsing, including frames split across transport chunks.
         buffer = buffer.replace(/\r\n/g, '\n');
@@ -80,19 +103,19 @@ export async function* streamReply({ settings, bot, messages, signal, ...context
           if (!data) continue;
           if (data.trim() === '[DONE]') { finished = true; break; }
           let payload;
-          try { payload = JSON.parse(data); } catch { throw new Error('Local backend returned malformed streaming JSON.'); }
-          const text = readDelta(payload);
+          try { payload = JSON.parse(data); } catch { throw new Error(`${label} returned malformed streaming JSON.`); }
+          const text = readDelta(payload, label);
           if (text) { gotText = true; yield text; }
         }
         if (done) {
-          if (buffer.trim() && !finished) throw new Error('Local backend ended with an incomplete streaming frame.');
+          if (buffer.trim() && !finished) throw new Error(`${label} ended with an incomplete streaming frame.`);
           break;
         }
       }
-      if (!gotText) throw new Error('Local backend returned an empty response.');
+      if (!gotText) throw new Error(`${label} returned an empty response.`);
     } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
   } catch (error) {
-    if (timedOut) throw new Error('Local backend timed out after 30 seconds.');
+    if (timedOut) throw new Error(`${label} timed out after ${idleSeconds} seconds without a response.`);
     if (signal.aborted) throw signal.reason ?? new DOMException('Stopped', 'AbortError');
     throw error;
   } finally { clearTimeout(timer); signal.removeEventListener('abort', abort); }

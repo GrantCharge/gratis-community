@@ -20,6 +20,12 @@ Use an explicit instruction with a frequency, time and timezone. Daily, weekdays
 
 The app must be running and the computer awake. Closing its window leaves enabled schedules running; quitting does not. Missed intervals coalesce into one fresh run. Busy chats defer scheduled work. Failed or interrupted runs pause for review rather than blindly repeating an uncertain action. A timer cannot authorize unrelated purchases, messages or deletions.
 
+## Custom AI providers
+
+Besides Claude and Codex, Settings → **AI subscription** → **Custom provider** connects any OpenAI-compatible API that uses an address and an API key, such as FreeLLMAPI, Command Code (`https://api.commandcode.ai/provider/v1`) or DeepSeek (`https://api.deepseek.com/v1`). Open **Manage custom providers**, pick a preset or type the address, paste a key and choose **Add provider**. Gratis loads the provider's model list; routing aliases such as FreeLLMAPI's `auto:default` appear first.
+
+Addresses must use HTTPS, or HTTP on this computer only. Keys are encrypted with the operating system's secure storage, are sent only to that provider and are never shown again; to replace one, remove the provider and add it again. Custom models chat only: they cannot use connected apps, files, memory tools or the cloud computer. The model applies to the whole workspace and can be changed from the chat header. Choosing a custom model from the phone is not supported yet.
+
 ## Connected apps
 
 Composio sign-in and per-service authorization are optional. You can disconnect or change credentials in Settings. Review the permissions requested by each service. A bot can only use integrations exposed by its enabled runtime.

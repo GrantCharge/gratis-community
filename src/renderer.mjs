@@ -32,7 +32,7 @@ let homeVisible = true, submitting = null;
 let dateView = null;
 const sidebarViews = new Map();
 const messageViews=new Map();
-let claudeConnection = null, codexConnection=null, codexModels=[],codexLoading=null;
+let claudeConnection = null, codexConnection=null, codexModels=[],codexLoading=null,customCatalog={providers:[],presets:[]},customModels=[],customModelsFor='';
 let pendingProfileAvatar = null, profilePhotoSequence = 0, avatarTarget = null;
 let avatarSource = null, avatarImage = null, avatarCrop = null, imageSequence = 0, pointer = null;
 const el = (tag, className, text) => { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; };
@@ -106,11 +106,15 @@ function render(next) {
   $('conversations').replaceChildren(...state.conversations.filter(c => c.botId === bot.id&&!c.parentThreadId&&c.kind!=='group').sort((a,b) => b.createdAt-a.createdAt).map(c => {
     const option = el('option', null, c.title); option.value = c.id; option.selected = c.id === conversation.id; return option;
   }));
-  const local = state.settings.provider === 'local', claude = state.settings.provider === 'claude',codex=state.settings.provider==='codex';
-  $('backend-label').textContent = claude ? `Claude · ${state.settings.model}` : codex?`Codex · ${state.settings.model}`:local ? `Local AI server · ${state.settings.model}` : 'Local demo · scripted responses, no AI model';
-  $('footer-note').textContent = claude ? 'Claude uses your signed-in plan limits. Check important information.' : codex?'Codex uses your ChatGPT plan limits. Check important information.':local ? 'Responses come from your local AI server. Check important information.' : 'Demo mode illustrates the chat workflow. Choose Claude or Codex in settings for AI replies.';
-  $('settings-button').title = `Settings · ${claude ? 'Claude' : codex?'Codex':local ? 'local AI server' : 'local demo'}`;
-  $('chat-model').hidden = !claude&&!codex;
+  const local = state.settings.provider === 'local', claude = state.settings.provider === 'claude',codex=state.settings.provider==='codex',custom=state.settings.provider==='custom',customName=customLabel();
+  $('backend-label').textContent = claude ? `Claude · ${state.settings.model}` : codex?`Codex · ${state.settings.model}`:custom?`${customName} · ${state.settings.model}`:local ? `Local AI server · ${state.settings.model}` : 'Local demo · scripted responses, no AI model';
+  $('footer-note').textContent = claude ? 'Claude uses your signed-in plan limits. Check important information.' : codex?'Codex uses your ChatGPT plan limits. Check important information.':custom?`Replies come from ${customName} and use its limits. Chat only, no connected apps. Check important information.`:local ? 'Responses come from your local AI server. Check important information.' : 'Demo mode illustrates the chat workflow. Choose Claude or Codex in settings for AI replies.';
+  $('settings-button').title = `Settings · ${claude ? 'Claude' : codex?'Codex':custom?customName:local ? 'local AI server' : 'local demo'}`;
+  $('chat-model').hidden = !claude&&!codex&&!custom;
+  // Name who supplies (and bills) the model, so a Claude model from Command Code isn't mistaken for the Claude plan.
+  const providerName=syncChatProviders();
+  $('chat-model').title=providerName?`${providerName} · applies to the next reply`:'Applies to the next reply';
+  if(custom&&customModelsFor!==state.settings.customProviderId)void loadCustomModels(state.settings.customProviderId,{quiet:true});
   syncChatModels(bot);
   selects.sync();
   if(!threadUI?.composing){
@@ -252,9 +256,39 @@ $('workspace-profile').onclick = () => openSettings();
 $('export-workspace').onclick = () => run(() => api.exportData('workspace'));
 $('share-conversation').onclick = () => run(() => api.exportData('conversation'));
 $('attach-menu').onclick = () => run(()=>api.attachFiles({conversationId:state.activeConversationId}));
+// Header provider switcher: the Claude plan, the ChatGPT plan and each custom provider, each keeping its last model.
+function providerChoice(){const p=state.settings.provider;return p==='custom'?`custom:${state.settings.customProviderId}`:p;}
+function syncChatProviders(){
+ const p=state.settings.provider,select=$('chat-provider'),choices=[{value:'claude',label:'Claude plan',title:'Uses your Claude subscription'},{value:'codex',label:'ChatGPT plan',title:'Uses your ChatGPT (Codex) subscription'},...customCatalog.providers.map(c=>({value:`custom:${c.id}`,label:c.label,title:`Supplied and billed by ${c.label}`}))];
+ const current=providerChoice();if(!choices.some(c=>c.value===current))choices.push(p==='custom'?{value:current,label:customLabel(),title:''}:{value:current,label:p==='local'?'Local AI server':'Local demo',title:p==='local'?'Uses your local AI server':'Scripted demo replies, no AI model'});
+ choices.push({value:'settings',label:'Manage providers…',title:'Add or remove providers in Settings'});
+ select.replaceChildren(...choices.map(c=>{const o=el('option',null,c.label);o.value=c.value;o.title=c.title;if(c.value==='claude')o.dataset.logo='claude';if(c.value==='codex')o.dataset.logo='openai';return o;}));
+ select.value=current;select.hidden=false;select.disabled=isStreaming();
+ const chosen=choices.find(c=>c.value===current);select.title=chosen?`${chosen.title||chosen.label}. Click to switch provider.`:'Choose who supplies replies';
+ return p==='claude'?'Claude plan':p==='codex'?'ChatGPT plan':p==='custom'?customLabel():'';
+}
+async function providerSettings(choice){
+ const remembered=state.settings.providerDefaults||{};
+ if(choice==='claude'){const r=remembered.claude||{};return{provider:'claude',model:['haiku','sonnet','opus'].includes(r.model)?r.model:'sonnet',effort:r.effort||'medium'};}
+ if(choice==='codex'){const r=remembered.codex||{};if(r.model)return{provider:'codex',model:r.model,effort:r.effort||'medium'};await checkCodexConnection();if(!codexConnection?.signedIn)throw new Error('Sign in to ChatGPT in Settings first.');const first=codexModels[0];if(!first)throw new Error('No ChatGPT models are available yet. Check the connection in Settings.');return{provider:'codex',model:first.id,effort:first.defaultEffort||'medium'};}
+ const id=choice.slice('custom:'.length),models=await api.customModels({id}),wanted=remembered[`custom:${id}`]?.model;
+ const model=models.some(m=>m.id===wanted)?wanted:models[0]?.id;if(!model)throw new Error('This provider has no models available. Check it in Settings.');
+ return{provider:'custom',customProviderId:id,model,effort:'medium'};
+}
+$('chat-provider').onchange = async () => {
+  const choice=$('chat-provider').value,previous=providerChoice();
+  if(choice==='settings'){$('chat-provider').value=previous;selects.sync();openSettings();return;}
+  if(choice===previous)return;
+  $('chat-provider').disabled=true;selects.sync();
+  const {customProviderId,...rest}=state.settings;
+  const result=await run(async()=>api.updateSettings({...rest,...await providerSettings(choice)}));
+  if(!result){$('chat-provider').value=previous;$('chat-provider').disabled=false;selects.sync();}
+  else if(result.settings?.provider==='custom')void loadCustomModels(result.settings.customProviderId,{quiet:true});
+};
 $('chat-model').onchange = async () => {
   const previous = state.settings.model;
-  const result = await run(() => api.updateBot({id:state.activeBotId,[state.settings.provider==='codex'?'codexModel':'model']:$('chat-model').value}));
+  // Custom providers have one workspace-wide model; Claude and Codex remember a model per bot.
+  const result = await run(() => state.settings.provider==='custom'?api.updateSettings({...state.settings,model:$('chat-model').value}):api.updateBot({id:state.activeBotId,[state.settings.provider==='codex'?'codexModel':'model']:$('chat-model').value}));
   if (!result) $('chat-model').value = previous;
 };
 let sidebarDrag = null;
@@ -324,10 +358,11 @@ function openSettings() {
   $('claude-effort').value = state.settings.provider==='claude'?state.settings.effort||'medium':state.settings.providerDefaults?.claude?.effort||'medium';
   syncCodexEffort(state.settings.provider==='codex'?state.settings.effort:state.settings.providerDefaults?.codex?.effort);
   $('voice-language').value = state.settings.voiceLanguage || 'en';
+  $('custom-key').value = ''; $('custom-status').textContent = '';
   $('claude-model').onchange();
   $('appearance').value = state.settings.appearance??localStorage.getItem('orbit-appearance')??'system'; $('provider').onchange(); $('settings-dialog').showModal(); selects.sync();
 }
-$('provider').onchange = () => { $('codex-options').hidden=$('provider').value!=='codex';if($('provider').value==='codex')void checkCodexConnection(); $('local-options').hidden = $('provider').value !== 'local'; $('claude-options').hidden = $('provider').value !== 'claude'; $('model').required = $('provider').value === 'local'; if ($('provider').value === 'claude') void checkClaudeConnection(); };
+$('provider').onchange = () => { $('custom-options').hidden=$('provider').value!=='custom';if($('provider').value==='custom')void openCustomOptions(); $('codex-options').hidden=$('provider').value!=='codex';if($('provider').value==='codex')void checkCodexConnection(); $('local-options').hidden = $('provider').value !== 'local'; $('claude-options').hidden = $('provider').value !== 'claude'; $('model').required = $('provider').value === 'local'; if ($('provider').value === 'claude') void checkClaudeConnection(); };
 $('claude-model').onchange = () => { $('claude-effort').disabled = $('claude-model').value === 'haiku'; selects.sync(); };
 async function checkClaudeConnection() {
   $('claude-status').textContent = 'Checking Claude sign-in…'; $('check-claude').disabled = true;
@@ -336,7 +371,7 @@ async function checkClaudeConnection() {
   finally { $('check-claude').disabled = false; }
 }
 $('check-claude').onclick = checkClaudeConnection;
-function modelsForProvider(){return state.settings.provider==='codex'?codexModels:[{id:'haiku',name:'Haiku'},{id:'sonnet',name:'Sonnet'},{id:'opus',name:'Opus'}];}
+function modelsForProvider(){if(state.settings.provider==='custom')return customModels;return state.settings.provider==='codex'?codexModels:[{id:'haiku',name:'Haiku'},{id:'sonnet',name:'Sonnet'},{id:'opus',name:'Opus'}];}
 function fillModels(select,models,selected,inherit=false){
  const choices=[...(inherit?[{id:'',name:'Use app default'}]:[]),...models];
  if(selected&&!choices.some(m=>m.id===selected))choices.push({id:selected,name:selected});
@@ -344,7 +379,7 @@ function fillModels(select,models,selected,inherit=false){
  const key=JSON.stringify(choices);if(select.dataset.models!==key){select.replaceChildren(...choices.map(m=>{const option=el('option',null,m.name);option.value=m.id;return option;}));select.dataset.models=key;}
  select.value=choices.some(m=>m.id===selected)?selected:(models.find(m=>m.isDefault)?.id||choices[0].id);select.disabled=!models.length&&!inherit;
 }
-function syncChatModels(bot){const codex=state.settings.provider==='codex';fillModels($('chat-model'),modelsForProvider(),(codex?bot.codexModel:bot.model)||state.settings.model);$('chat-model').disabled=isStreaming()||!modelsForProvider().length;}
+function syncChatModels(bot){const codex=state.settings.provider==='codex',custom=state.settings.provider==='custom';fillModels($('chat-model'),modelsForProvider(),custom?state.settings.model:(codex?bot.codexModel:bot.model)||state.settings.model);$('chat-model').disabled=isStreaming()||!modelsForProvider().length;}
 function syncCodexEffort(preferred){
  const model=codexModels.find(m=>m.id===$('codex-model').value),efforts=model?.efforts?.length?model.efforts:['low','medium','high'];const selected=preferred||$('codex-effort').value||model?.defaultEffort;
  fillModels($('codex-effort'),efforts.map(id=>({id,name:{xhigh:'Extra high',max:'Maximum',ultra:'Ultra'}[id]||id[0].toUpperCase()+id.slice(1)})),efforts.includes(selected)?selected:model?.defaultEffort||efforts[0]);selects.sync();
@@ -356,9 +391,40 @@ async function checkCodexConnection(){
  codexLoading=(async()=>{try{codexConnection=await api.codexStatus();$('codex-status').textContent=codexConnection.message;if(codexConnection.signedIn){codexModels=await api.codexModels();const selected=$('codex-model').value|| (state.settings.provider==='codex'?state.settings.model:state.settings.providerDefaults?.codex?.model);fillModels($('codex-model'),codexModels,selected);syncCodexEffort();}if(state)render(state);}catch(error){$('codex-status').textContent=error.message||'Could not check Codex. Try again.';}finally{$('check-codex').disabled=false;codexLoading=null;selects.sync();}})();return codexLoading;
 }
 $('check-codex').onclick=checkCodexConnection;
+// Custom providers: OpenAI-compatible APIs with an address and an encrypted API key.
+function customLabel(){return customCatalog.providers.find(p=>p.id===state?.settings.customProviderId)?.label||'Custom provider';}
+async function refreshCustomCatalog(){customCatalog=await api.customProviders();return customCatalog;}
+function renderCustomProviders(selected){
+ const providers=customCatalog.providers;
+ fillModels($('custom-provider'),providers.map(p=>({id:p.id,name:p.label})),selected||$('custom-provider').value||state.settings.customProviderId);
+ $('custom-provider').disabled=!providers.length;
+ $('custom-provider-list').replaceChildren(...providers.map(p=>{const row=el('div','custom-provider-row');const name=el('strong',null,p.label),address=el('span','custom-provider-address',p.baseUrl+(p.hasKey?' · key saved':''));const remove=el('button','quiet-button','Remove');remove.type='button';remove.onclick=async()=>{if(!confirm(`Remove ${p.label}? Its saved API key is deleted from this computer.`))return;try{await api.removeCustomProvider({id:p.id});await refreshCustomCatalog();renderCustomProviders();void loadCustomModels($('custom-provider').value);}catch(error){$('custom-status').textContent=error.message;}};row.append(name,address,remove);return row;}));
+ $('custom-presets').replaceChildren(...customCatalog.presets.map(preset=>{const b=el('button','quiet-button',preset.label);b.type='button';b.onclick=()=>{$('custom-label').value=preset.label;$('custom-url').value=preset.baseUrl;$('custom-preset-note').textContent=preset.note;(preset.baseUrl?$('custom-key'):$('custom-url')).focus();};return b;}));
+ if(!providers.length)$('custom-manage').open=true;
+ selects.sync();
+}
+async function openCustomOptions(){
+ try{await refreshCustomCatalog();renderCustomProviders(state.settings.customProviderId);if($('custom-provider').value)await loadCustomModels($('custom-provider').value);else $('custom-status').textContent='Add a provider to get started.';}
+ catch(error){$('custom-status').textContent=error.message||'Could not load custom providers.';}
+}
+async function loadCustomModels(id,{force=false,quiet=false}={}){
+ if(!id){customModels=[];customModelsFor='';fillModels($('custom-model'),[],'');return;}
+ customModelsFor=id;if(!quiet)$('custom-status').textContent='Loading models…';$('refresh-custom-models').disabled=true;
+ try{const models=await api.customModels({id,force});if(customModelsFor!==id)return;customModels=models;fillModels($('custom-model'),models,state.settings.customProviderId===id?state.settings.model:'');if(!quiet)$('custom-status').textContent=`${models.length} model${models.length===1?'':'s'} available.`;if(state)render(state);}
+ catch(error){if(customModelsFor===id&&!quiet){customModels=[];fillModels($('custom-model'),[],'');$('custom-status').textContent=error.message;}if(quiet)customModelsFor='';}
+ finally{$('refresh-custom-models').disabled=false;selects.sync();}
+}
+$('custom-provider').onchange=()=>void loadCustomModels($('custom-provider').value);
+$('refresh-custom-models').onclick=()=>void loadCustomModels($('custom-provider').value,{force:true});
+$('custom-add').onclick=async()=>{
+ $('custom-add').disabled=true;$('custom-status').textContent='Checking the provider…';
+ try{const added=await api.addCustomProvider({label:$('custom-label').value,baseUrl:$('custom-url').value,apiKey:$('custom-key').value});$('custom-key').value='';$('custom-label').value='';$('custom-url').value='';$('custom-preset-note').textContent='';await refreshCustomCatalog();renderCustomProviders(added.id);$('custom-manage').open=false;await loadCustomModels(added.id,{force:true});}
+ catch(error){$('custom-status').textContent=error.message;}finally{$('custom-add').disabled=false;}
+};
+void refreshCustomCatalog().then(()=>{if(state)render(state);}).catch(()=>{});
 $('settings-button').onclick = openSettings; $('configure-backend').onclick = openSettings;
 $('settings-form').onsubmit = async e => { e.preventDefault();
-  const result = await run(() => api.updateSettings({ appearance:$('appearance').value,profileAvatarDataUrl: pendingProfileAvatar, displayName: $('profile-name').value.trim(), provider: $('provider').value, baseUrl: $('base-url').value.trim(), model: $('provider').value === 'claude' ? $('claude-model').value : $('provider').value==='codex'?$('codex-model').value:$('model').value.trim(), effort: $('provider').value==='codex'?$('codex-effort').value:$('claude-effort').value, voiceCleanup: true, voiceLanguage: $('voice-language').value }));
+  const result = await run(() => api.updateSettings({ appearance:$('appearance').value,profileAvatarDataUrl: pendingProfileAvatar, displayName: $('profile-name').value.trim(), provider: $('provider').value, baseUrl: $('base-url').value.trim(), model: $('provider').value === 'claude' ? $('claude-model').value : $('provider').value==='codex'?$('codex-model').value:$('provider').value==='custom'?$('custom-model').value:$('model').value.trim(), effort: $('provider').value==='codex'?$('codex-effort').value:$('provider').value==='custom'?'medium':$('claude-effort').value, ...($('provider').value==='custom'?{customProviderId:$('custom-provider').value}:{}), voiceCleanup: true, voiceLanguage: $('voice-language').value }));
   if (result) { localStorage.setItem('orbit-appearance', $('appearance').value); applyTheme(await api.systemDark()); $('settings-dialog').close(); }
 };
 function applyTheme(systemDark){systemIsDark=systemDark;document.documentElement.dataset.theme=resolveTheme(state?.settings.appearance??localStorage.getItem('orbit-appearance')??'system',systemDark);if(state)render(state);}

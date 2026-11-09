@@ -16,7 +16,7 @@ const humanComputers=new Set(),computerControlEpochs=new Map(),computerControlRe
 function setHumanControl(id,human){if(humanComputers.has(id)!==human){human?humanComputers.add(id):humanComputers.delete(id);computerControlRevisions.set(id,(computerControlRevisions.get(id)||0)+1);}}
 const controlState=value=>({...value,control:humanComputers.has(value.conversationId)?'human':'bot',controlRevision:computerControlRevisions.get(value.conversationId)||0});
 const computerSnapshot=id=>{const snapshot=cloud.snapshot(id);return {...snapshot,state:controlState(snapshot.state)};};
-let window, service, connections, files, cloud, signIn, memory, t3Environments, t3Tasks, t3Host, t3Installing = '', schedules, mobile, mobileProviders, mobileDictation, computerControl, mobileComputer, closing = false, finishDraftFlush, voiceTask;
+let window, service, connections, customProviders, files, cloud, signIn, memory, t3Environments, t3Tasks, t3Host, t3Installing = '', schedules, mobile, mobileProviders, mobileDictation, computerControl, mobileComputer, closing = false, finishDraftFlush, voiceTask;
 app.on('activate',()=>{if(window&&!window.isDestroyed()){window.show();window.focus();}});
 app.on('second-instance', () => { if (window && !window.isDestroyed()) { window.show(); window.focus(); } });
 async function shutdown() {
@@ -31,7 +31,7 @@ async function shutdown() {
   }
   const activeVoice = voiceTask;
   activeVoice?.controller.abort(new DOMException('App closed', 'AbortError'));
-  try { mobileComputer?.close(); await mobileDictation?.close(); await mobile?.close(); await activeVoice?.promise?.catch(() => {}); await signIn?.cancel({preserve:true}); await schedules?.close(); await t3Tasks?.close(); await t3Environments?.close(); await service?.close(); await cloud?.close(); } finally { app.exit(0); }
+  try { mobileComputer?.close(); await mobileDictation?.close(); await mobile?.close(); await activeVoice?.promise?.catch(() => {}); await signIn?.cancel({preserve:true}); await schedules?.close(); await t3Tasks?.close(); await t3Environments?.close(); await service?.close(); await customProviders?.close(); await cloud?.close(); } finally { app.exit(0); }
 }
 const actions = ['createBot', 'deleteBot', 'selectBot', 'newConversation', 'selectConversation', 'setDraft',
   'createThread','renameThread','updateThreadMembers','pinThread','deleteThread','updateSettings', 'updateBot', 'duplicateBot', 'respondApproval', 'updateQueue', 'send', 'stop', 'retry'];
@@ -53,6 +53,10 @@ app.whenReady().then(async () => {
   const [{Connections},{WorkspaceFiles},{CloudComputer},{agentRuntime},{ComposioSignIn}] = await Promise.all([import('./connections.mjs'),import('./workspace-files.mjs'),import('./cloud-computer.mjs'),import('./agent-tools.mjs'),import('./composio-signin.mjs')]);
   connections=await new Connections({directory:dataDir,encrypt:text=>{if(!safeStorage.isEncryptionAvailable()||(process.platform==='linux'&&safeStorage.getSelectedStorageBackend()==='basic_text'))throw new Error('Secure storage is unavailable.');return safeStorage.encryptString(text);},decrypt:buffer=>safeStorage.decryptString(buffer)}).init();
   signIn=new ComposioSignIn({directory:dataDir,binary:process.platform==='darwin'?(app.isPackaged?path.join(process.resourcesPath,'composio-cli','composio'):path.join(__dirname,'../assets/composio-cli/composio')):null,connections,openExternal:url=>shell.openExternal(url),onState:state=>{if(window&&!window.isDestroyed())window.webContents.send('orbit:signin-state',state);}});
+  // OpenAI-compatible providers with API keys (FreeLLMAPI, Command Code, DeepSeek…); keys stay encrypted in the main process.
+  const {CustomProviders,CUSTOM_PROVIDER_PRESETS}=await import('./custom-providers.mjs');
+  customProviders=await new CustomProviders({directory:dataDir,encrypt:connections.encrypt,decrypt:connections.decrypt}).init();
+  (await import('./backend.mjs')).setCustomProviderLookup(id=>customProviders.get(id));
   connections.onChange=()=>{if(window&&!window.isDestroyed())window.webContents.send('orbit:connections-changed');};
   const [{T3Environments,LEGACY_ENVIRONMENT},{T3Tasks,t3TaskActive},{T3LocalHost}]=await Promise.all([import('./t3-environments.mjs'),import('./t3-tasks.mjs'),import('./t3-local.mjs')]);
   const t3Changed=()=>{if(window&&!window.isDestroyed())window.webContents.send('orbit:t3-changed');};
@@ -206,6 +210,11 @@ app.whenReady().then(async () => {
   ipcMain.handle('orbit:attach-files', async(e,{conversationId})=>{authorized(e);const c=service._conversation(conversationId);const result=await dialog.showOpenDialog(window,{properties:['openFile','multiSelections'],title:'Attach files to this bot'});if(result.canceled)return service.snapshot();const added=await files.import(c.botId,result.filePaths);c.draftAttachments=[...(c.draftAttachments||[]),...added].slice(0,10);return service._changed();});
   ipcMain.handle('orbit:remove-attachment', async(e,{conversationId,path:attachment})=>{authorized(e);const c=service._conversation(conversationId);c.draftAttachments=(c.draftAttachments||[]).filter(f=>f.path!==attachment);return service._changed();});
   ipcMain.handle('orbit:export-file', async(e,{botId,path:relative})=>{authorized(e);service._bot(botId);const source=await files.target(botId,relative);const result=await dialog.showSaveDialog(window,{defaultPath:path.basename(source)});if(!result.canceled&&result.filePath)await fs.copyFile(source,result.filePath);});
+  ipcMain.handle('orbit:custom-providers', e=>{authorized(e);return{providers:customProviders.snapshot(),presets:CUSTOM_PROVIDER_PRESETS};});
+  ipcMain.handle('orbit:custom-provider-add', (e,value)=>{authorized(e);return customProviders.add({label:value?.label,baseUrl:value?.baseUrl,apiKey:value?.apiKey});});
+  ipcMain.handle('orbit:custom-provider-update', (e,value)=>{authorized(e);return customProviders.update({id:value?.id,label:value?.label,baseUrl:value?.baseUrl,apiKey:value?.apiKey});});
+  ipcMain.handle('orbit:custom-provider-remove', (e,value)=>{authorized(e);const settings=service.state.settings;if(settings.provider==='custom'&&settings.customProviderId===value?.id)throw new Error('Choose another AI provider in Settings before removing this one.');return customProviders.remove({id:value?.id});});
+  ipcMain.handle('orbit:custom-models', (e,value)=>{authorized(e);return customProviders.models(value?.id,{force:!!value?.force});});
   ipcMain.handle('orbit:codex-status', async e=>{authorized(e);return (await import('./codex-client.mjs')).getCodexStatus();});
   ipcMain.handle('orbit:codex-models', async e=>{authorized(e);return (await import('./codex-client.mjs')).getCodexModels();});
   ipcMain.handle('orbit:claude-status', async e => { authorized(e); const { getClaudeStatus } = await import('./claude-backend.mjs'); return getClaudeStatus(); });
