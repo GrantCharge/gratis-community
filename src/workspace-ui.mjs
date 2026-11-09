@@ -2,6 +2,7 @@ import {isBlankComputerFrame,computerNotice} from './computer-preview.mjs';
 import {setupSchedulesUI} from './schedules-ui.mjs';
 import {setupT3UI} from './t3-ui.mjs';
 import {setupMemoryUI} from './memory-ui.mjs';
+import {setupMcpServersUI} from './mcp-servers-ui.mjs';
 import {setupXray} from './xray.mjs';
 import {setupComputerInput} from './computer-input.mjs';
 import {setupWorkspaceLayout,computerPoint} from './workspace-layout.mjs';
@@ -129,8 +130,9 @@ export function setupWorkspace({api,getState,run,avatar,onOpenSource}){
     $('connection-error').hidden=true;
     try{renderSignIn(await api.signInStart());}catch(error){renderSignIn({status:'error',error:error.message});}
   }
+  const ownApps=setupMcpServersUI({api});
   async function connections({signIn=false}={}){
-    const status=await api.connections();linked=status.composio;
+    void ownApps.refresh();const status=await api.connections();linked=status.composio;
     $('cloud-status').textContent=status.cloud?'Cloud computer connected':'Cloud computer not connected';$('cloud-endpoint').value=status.cloudEndpoint;$('connection-error').hidden=true;
     if(!$('connections-dialog').open)$('connections-dialog').showModal();renderSignIn(await api.signInState());
     if(linked)void loadCatalog();

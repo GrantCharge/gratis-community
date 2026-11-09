@@ -40,3 +40,5 @@ main.workspace-open{padding-right:var(--workspace-width,360px)}#work-panel{width
 
 .computer-keyboard{position:fixed;left:-10000px;top:0;width:2px;height:2px;opacity:0;pointer-events:none}
 #computer-screen{touch-action:none;user-select:none;-webkit-user-drag:none}#computer-screen[data-control=human]{cursor:default}
+
+.mcp-server-row .mcp-server-actions{grid-column:1/-1;grid-row:auto;display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}.mcp-server-row .mcp-server-actions button{grid-column:auto;grid-row:auto;font-size:12px;padding:5px 10px}#mcp-servers details label{display:block;margin-top:8px}
