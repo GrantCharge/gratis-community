@@ -8,7 +8,8 @@ export function initialState() {
   return { version: 1, bots: [{ id: botId, name: 'Gratis', instructions: 'Be helpful, clear, and concise.', userPromptTemplate: '{{message}}', promptMode: 'auto', promptGenerated: false, color: '#496e57', avatarDataUrl: null, createdAt: now }], conversations: [{ id: conversationId, botId, title: 'New conversation', draft: '', messages: [], createdAt: now, updatedAt: now }], activeBotId: botId, activeConversationId: conversationId, settings: { ...DEFAULT_SETTINGS } };
 }
 function validState(s) {
-  if (!s || s.version !== 1 || !Array.isArray(s.bots) || !Array.isArray(s.conversations) || !s.settings || !['demo', 'local', 'claude', 'codex'].includes(s.settings.provider) || typeof s.settings.baseUrl !== 'string' || typeof s.settings.model !== 'string') return false;
+  if (!s || s.version !== 1 || !Array.isArray(s.bots) || !Array.isArray(s.conversations) || !s.settings || !['demo', 'local', 'claude', 'codex', 'custom'].includes(s.settings.provider) || typeof s.settings.baseUrl !== 'string' || typeof s.settings.model !== 'string') return false;
+  if (s.settings.customProviderId !== undefined && (typeof s.settings.customProviderId !== 'string' || s.settings.customProviderId.length > 64)) return false;
   if(s.settings.appearance!==undefined&&!['system','light','dark'].includes(s.settings.appearance))return false;
   if (s.settings.profileAvatarDataUrl !== undefined && s.settings.profileAvatarDataUrl !== null && (typeof s.settings.profileAvatarDataUrl !== 'string' || s.settings.profileAvatarDataUrl.length > 2_000_000 || !/^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(s.settings.profileAvatarDataUrl))) return false;
   if (s.settings.displayName !== undefined && (typeof s.settings.displayName !== 'string' || s.settings.displayName.length > 80)) return false;
