@@ -19,13 +19,15 @@ export function t3Payload(result){
  return value;
 }
 export class T3Connection {
- constructor({directory,encrypt,decrypt,openExternal,onState=()=>{},clientFactory=()=>new Client({name:'Gratis',version:'0.12.0'}),transportFactory=(url,options)=>new StreamableHTTPClientTransport(new URL(url),options)}){
-  Object.assign(this,{directory,encrypt,decrypt,openExternal,onState,clientFactory,transportFactory});this.data={};this.current={status:'disconnected',connected:false};this.persist=Promise.resolve();this.clientPromise=null;this.authJob=null;this.epoch=0;
+ // file: each environment keeps its own encrypted connection file; the default is the original single-connection file.
+ constructor({directory,encrypt,decrypt,openExternal,onState=()=>{},file='t3-connection.secure',clientFactory=()=>new Client({name:'Gratis',version:'0.12.0'}),transportFactory=(url,options)=>new StreamableHTTPClientTransport(new URL(url),options)}){
+  if(!/^t3-connection(?:-[a-f0-9-]{36})?\.secure$/.test(file))throw new Error('Invalid T3 connection file.');
+  Object.assign(this,{directory,encrypt,decrypt,openExternal,onState,file,clientFactory,transportFactory});this.data={};this.current={status:'disconnected',connected:false};this.persist=Promise.resolve();this.clientPromise=null;this.authJob=null;this.epoch=0;
  }
- async init(){try{this.data=JSON.parse(this.decrypt(await readFile(join(this.directory,'t3-connection.secure'))));}catch(e){if(e.code!=='ENOENT')throw new Error('Could not unlock the saved T3 connection.');}if(this.data.endpoint&&!this.data.identity){this.data.identity=randomUUID();await this.save();}this.current={status:this.data.endpoint?'saved':'disconnected',connected:false};return this;}
+ async init(){try{this.data=JSON.parse(this.decrypt(await readFile(join(this.directory,this.file))));}catch(e){if(e.code!=='ENOENT')throw new Error('Could not unlock the saved T3 connection.');}if(this.data.endpoint&&!this.data.identity){this.data.identity=randomUUID();await this.save();}this.current={status:this.data.endpoint?'saved':'disconnected',connected:false};return this;}
  snapshot(){return{...this.current,endpoint:this.data.endpoint||'',local:this.data.local||null};}
  update(status,error){this.current={status,connected:status==='connected',...(error?{error:t3Error(error)}:{})};this.onState(this.snapshot());return this.snapshot();}
- async save(){const value=JSON.stringify(this.data);const write=async()=>{await mkdir(this.directory,{recursive:true,mode:0o700});const tmp=join(this.directory,'.t3-'+randomUUID());await writeFile(tmp,this.encrypt(value),{mode:0o600});await rename(tmp,join(this.directory,'t3-connection.secure'));};this.persist=this.persist.then(write,write);return this.persist;}
+ async save(){const value=JSON.stringify(this.data);const write=async()=>{await mkdir(this.directory,{recursive:true,mode:0o700});const tmp=join(this.directory,'.t3-'+randomUUID());await writeFile(tmp,this.encrypt(value),{mode:0o600});await rename(tmp,join(this.directory,this.file));};this.persist=this.persist.then(write,write);return this.persist;}
  provider(flow){const owner=this;return{
   get redirectUrl(){return owner.data.redirectUrl;},
   get clientMetadata(){return{client_name:'Gratis',redirect_uris:[owner.data.redirectUrl||'http://127.0.0.1/t3/callback'],grant_types:['authorization_code'],response_types:['code'],token_endpoint_auth_method:'none'};},
