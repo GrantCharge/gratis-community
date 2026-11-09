@@ -50,6 +50,8 @@ export function setupVoiceInput({api,getContext,insertText,isBusy,notice,onState
     if(/silent|no clear speech/i.test(message))return 'No speech detected. Try recording again.';
     if(/microphone|notallowed|permission/i.test(message))return 'Allow Gratis to use your microphone in System Settings → Privacy & Security → Microphone.';
     if(/too large|8 MB|two minutes/i.test(message))return 'Try a shorter recording.';
+    // Setup problems (Whisper, its model or ffmpeg missing) need a fix, not a retry, so show them as written.
+    const setup=message.match(/Voice input needs [^\n]*/);if(setup)return setup[0];
     return 'Could not transcribe that recording. Please try again.';
   }
   async function record() {

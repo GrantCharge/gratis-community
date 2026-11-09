@@ -54,7 +54,7 @@ export async function* streamReply({ settings, bot, messages, signal, ...context
   if (settings.provider === 'custom') {
     if (!customProviderLookup) throw new Error('Custom providers are not available here.');
     const provider = customProviderLookup(settings.customProviderId);
-    yield* streamOpenAI({ url: `${provider.baseUrl}/chat/completions`, headers: authHeaders(provider), label: provider.label, model: settings.model, bot, messages, signal, context, idleSeconds: 90 });
+    yield* streamOpenAI({ url: `${provider.baseUrl}/chat/completions`, headers: authHeaders(provider), label: provider.label, note: runtimeNote(provider.label, settings.model), model: settings.model, bot, messages, signal, context, idleSeconds: 90 });
     return;
   }
   yield* streamOpenAI({ url: `${settings.baseUrl}/chat/completions`, headers: {}, label: 'Local backend', model: settings.model, bot, messages, signal, context, idleSeconds: 30 });
@@ -62,7 +62,14 @@ export async function* streamReply({ settings, bot, messages, signal, ...context
 
 // OpenAI-style chat completions. The timeout restarts whenever data arrives, so long
 // answers keep streaming while a silent server still fails.
-async function* streamOpenAI({ url, headers, label, model, bot, messages, signal, context, idleSeconds }) {
+// Chat-completions models can't see which service or model they run on, so they answer
+// "I don't know" when asked. Tell them; an auto:* alias is chosen per request by the provider.
+export function runtimeNote(label, model) {
+  if (!label || !model) return '';
+  const routed = /^auto(?::|$)/i.test(model) ? ` "${model}" is an automatic routing choice: ${label} picks the underlying model for each request, so name the alias rather than guessing a specific model.` : '';
+  return `You are running in Gratis through ${label}, using the model "${model}".${routed} If asked which model or provider you are, say so.`;
+}
+async function* streamOpenAI({ url, headers, label, note = '', model, bot, messages, signal, context, idleSeconds }) {
   const controller = new AbortController();
   const abort = () => controller.abort(signal.reason);
   if (signal.aborted) abort(); else signal.addEventListener('abort', abort, { once: true });
@@ -73,7 +80,7 @@ async function* streamOpenAI({ url, headers, label, model, bot, messages, signal
     const response = await fetch(url, {
       method: 'POST', redirect: 'error', signal: controller.signal,
       headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream, application/json', ...headers },
-      body: JSON.stringify({ model, stream: true, messages: [{ role: 'system', content: bot.instructions }, ...messages.map(({ role, content },i) => ({ role, content:i===messages.length-1?withMemoryContext(content,context.turnContext):content }))] })
+      body: JSON.stringify({ model, stream: true, messages: [{ role: 'system', content: [bot.instructions, note].filter(Boolean).join('\n\n') }, ...messages.map(({ role, content },i) => ({ role, content:i===messages.length-1?withMemoryContext(content,context.turnContext):content }))] })
     });
     if (response.status === 401 || response.status === 403) throw new Error(`${label} rejected the API key. Update it in Settings.`);
     if (response.status === 429) throw new Error(`${label} is rate limiting requests. Wait a moment or choose another model.`);
