@@ -8,6 +8,7 @@ import { customModelId, authHeaders } from './custom-providers.mjs';
 // The desktop registers how to look up a custom provider (address and decrypted key) by id.
 let customProviderLookup = null;
 export function setCustomProviderLookup(lookup) { customProviderLookup = lookup; }
+export function lookupCustomProvider(id) { if (!customProviderLookup) throw new Error('Custom providers are not available here.'); return customProviderLookup(id); }
 const PROVIDER_ID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 
 export function validateSettings(value) {
@@ -23,10 +24,12 @@ export function validateSettings(value) {
   if (value.provider === 'claude' && !['sonnet', 'haiku', 'opus'].includes(value.model)) throw new Error('Choose a Claude model: Sonnet, Haiku, or Opus.');
   if(value.provider==='codex'&&!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,199}$/.test(value.model))throw new Error('Choose a Codex model from your account.');
   if (value.provider === 'custom' && (!PROVIDER_ID.test(value.customProviderId || '') || !customModelId(value.model.trim()))) throw new Error('Choose a custom provider and one of its models.');
+  if (value.voiceEngine !== undefined && value.voiceEngine !== 'local' && !/^custom:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value.voiceEngine)) throw new Error('Choose this Mac or a custom provider for voice transcription.');
+  if (value.voiceModel !== undefined && value.voiceModel !== '' && !customModelId(value.voiceModel)) throw new Error('Enter a valid transcription model, such as auto.');
   if (value.effort !== undefined && !['minimal','low', 'medium', 'high','xhigh','max','ultra','persistent'].includes(value.effort)) throw new Error('Choose low, medium, or high response effort.');
   if (value.voiceCleanup !== undefined && typeof value.voiceCleanup !== 'boolean') throw new Error('Choose whether to use Haiku transcript cleanup.');
   if (value.voiceLanguage !== undefined && !['en', 'auto'].includes(value.voiceLanguage)) throw new Error('Choose English or automatic language detection.');
-  return { ...(value.appearance!==undefined?{appearance:appearanceSetting(value.appearance)}:{}), profileAvatarDataUrl: value.profileAvatarDataUrl ?? null, displayName: value.displayName?.trim() || '', provider: value.provider, baseUrl: url.href.replace(/\/+$/, ''), model: value.model.trim(), effort: value.effort || 'medium', voiceCleanup: value.voiceCleanup !== false, voiceLanguage: value.voiceLanguage || 'en', ...(value.provider === 'custom' ? { customProviderId: value.customProviderId } : {}) };
+  return { ...(value.appearance!==undefined?{appearance:appearanceSetting(value.appearance)}:{}), profileAvatarDataUrl: value.profileAvatarDataUrl ?? null, displayName: value.displayName?.trim() || '', provider: value.provider, baseUrl: url.href.replace(/\/+$/, ''), model: value.model.trim(), effort: value.effort || 'medium', voiceCleanup: value.voiceCleanup !== false, voiceLanguage: value.voiceLanguage || 'en', voiceEngine: value.voiceEngine || 'local', voiceModel: value.voiceModel || 'auto', ...(value.provider === 'custom' ? { customProviderId: value.customProviderId } : {}) };
 }
 
 async function* demoReply({ bot, messages, signal }) {

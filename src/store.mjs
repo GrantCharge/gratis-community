@@ -15,6 +15,8 @@ function validState(s) {
   if (s.settings.displayName !== undefined && (typeof s.settings.displayName !== 'string' || s.settings.displayName.length > 80)) return false;
   if (s.settings.effort !== undefined && !['minimal','low', 'medium', 'high','xhigh','max','ultra','persistent'].includes(s.settings.effort)) return false;
   if (s.settings.voiceCleanup !== undefined && typeof s.settings.voiceCleanup !== 'boolean') return false;
+  if (s.settings.voiceEngine !== undefined && (typeof s.settings.voiceEngine !== 'string' || s.settings.voiceEngine.length > 64)) return false;
+  if (s.settings.voiceModel !== undefined && (typeof s.settings.voiceModel !== 'string' || s.settings.voiceModel.length > 200)) return false;
   if (s.settings.voiceLanguage !== undefined && !['en', 'auto'].includes(s.settings.voiceLanguage)) return false;
   const bots = new Set(), conversations = new Set();
   for (const b of s.bots) {

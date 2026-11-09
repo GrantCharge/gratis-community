@@ -81,7 +81,7 @@ export function setupVoiceInput({api,getContext,insertText,isBusy,notice,onState
           const result=await api.transcribeAudio({requestId,audioBase64,mimeType});
           if(token!==generation)return;
           const target=context;requestId=null;context=null;setPhase('idle');
-          if(insertText(result.text,target)&&result.warning)notice('Your transcript is ready. Some punctuation may need a quick check.');
+          if(insertText(result.text,target)&&result.warning)notice(result.fallback?result.warning:'Your transcript is ready. Some punctuation may need a quick check.');
         } catch(error) {
           if(token!==generation)return;
           requestId=null;context=null;setPhase('idle');notice(friendlyError(error));
