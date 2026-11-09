@@ -358,6 +358,7 @@ function openSettings() {
   $('claude-effort').value = state.settings.provider==='claude'?state.settings.effort||'medium':state.settings.providerDefaults?.claude?.effort||'medium';
   syncCodexEffort(state.settings.provider==='codex'?state.settings.effort:state.settings.providerDefaults?.codex?.effort);
   $('voice-language').value = state.settings.voiceLanguage || 'en';
+  renderVoiceEngines(state.settings.voiceEngine||'local');$('voice-model').value=state.settings.voiceModel&&state.settings.voiceModel!=='auto'?state.settings.voiceModel:'';
   $('custom-key').value = ''; $('custom-status').textContent = '';
   $('claude-model').onchange();
   $('appearance').value = state.settings.appearance??localStorage.getItem('orbit-appearance')??'system'; $('provider').onchange(); $('settings-dialog').showModal(); selects.sync();
@@ -414,6 +415,19 @@ async function loadCustomModels(id,{force=false,quiet=false}={}){
  catch(error){if(customModelsFor===id&&!quiet){customModels=[];fillModels($('custom-model'),[],'');$('custom-status').textContent=error.message;}if(quiet)customModelsFor='';}
  finally{$('refresh-custom-models').disabled=false;selects.sync();}
 }
+// Voice transcription: this Mac's Whisper, or a custom provider's speech-to-text with this Mac as the fallback.
+function renderVoiceEngines(selected){
+ const choices=[['local','This Mac (Whisper)'],...customCatalog.providers.map(p=>[`custom:${p.id}`,`${p.label} (online)`])];
+ if(selected!=='local'&&!choices.some(([v])=>v===selected))choices.push([selected,'Removed provider']);
+ $('voice-engine').replaceChildren(...choices.map(([value,label])=>{const o=el('option',null,label);o.value=value;return o;}));$('voice-engine').value=selected;syncVoiceEngine();
+}
+function syncVoiceEngine(){
+ const online=$('voice-engine').value!=='local',name=$('voice-engine').selectedOptions[0]?.textContent.replace(/ \(online\)$/,'')||'';
+ $('voice-model-row').hidden=!online;
+ $('voice-engine-note').textContent=online?`Recordings are sent to ${name} for transcription. If it fails, this Mac transcribes them instead. Leave the model as auto for FreeLLMAPI.`:'Recordings stay on this Mac.';
+ selects.sync();
+}
+$('voice-engine').onchange=syncVoiceEngine;
 $('custom-provider').onchange=()=>void loadCustomModels($('custom-provider').value);
 $('refresh-custom-models').onclick=()=>void loadCustomModels($('custom-provider').value,{force:true});
 $('custom-add').onclick=async()=>{
@@ -424,7 +438,7 @@ $('custom-add').onclick=async()=>{
 void refreshCustomCatalog().then(()=>{if(state)render(state);}).catch(()=>{});
 $('settings-button').onclick = openSettings; $('configure-backend').onclick = openSettings;
 $('settings-form').onsubmit = async e => { e.preventDefault();
-  const result = await run(() => api.updateSettings({ appearance:$('appearance').value,profileAvatarDataUrl: pendingProfileAvatar, displayName: $('profile-name').value.trim(), provider: $('provider').value, baseUrl: $('base-url').value.trim(), model: $('provider').value === 'claude' ? $('claude-model').value : $('provider').value==='codex'?$('codex-model').value:$('provider').value==='custom'?$('custom-model').value:$('model').value.trim(), effort: $('provider').value==='codex'?$('codex-effort').value:$('provider').value==='custom'?'medium':$('claude-effort').value, ...($('provider').value==='custom'?{customProviderId:$('custom-provider').value}:{}), voiceCleanup: true, voiceLanguage: $('voice-language').value }));
+  const result = await run(() => api.updateSettings({ appearance:$('appearance').value,profileAvatarDataUrl: pendingProfileAvatar, displayName: $('profile-name').value.trim(), provider: $('provider').value, baseUrl: $('base-url').value.trim(), model: $('provider').value === 'claude' ? $('claude-model').value : $('provider').value==='codex'?$('codex-model').value:$('provider').value==='custom'?$('custom-model').value:$('model').value.trim(), effort: $('provider').value==='codex'?$('codex-effort').value:$('provider').value==='custom'?'medium':$('claude-effort').value, ...($('provider').value==='custom'?{customProviderId:$('custom-provider').value}:{}), voiceCleanup: true, voiceLanguage: $('voice-language').value, voiceEngine: $('voice-engine').value, voiceModel: $('voice-model').value.trim() || 'auto' }));
   if (result) { localStorage.setItem('orbit-appearance', $('appearance').value); applyTheme(await api.systemDark()); $('settings-dialog').close(); }
 };
 function applyTheme(systemDark){systemIsDark=systemDark;document.documentElement.dataset.theme=resolveTheme(state?.settings.appearance??localStorage.getItem('orbit-appearance')??'system',systemDark);if(state)render(state);}
