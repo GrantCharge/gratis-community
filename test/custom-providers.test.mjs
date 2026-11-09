@@ -38,7 +38,7 @@ test('chat replies stream from the chosen custom provider with its key',async t=
  const id='11111111-2222-4333-8444-555555555555';setCustomProviderLookup(lookup=>{assert.equal(lookup,id);return{label:'Test provider',baseUrl:`http://127.0.0.1:${server.address().port}/v1`,apiKey:'k2'};});
  const settings=validateSettings({provider:'custom',customProviderId:id,model:'auto:default',baseUrl:'http://127.0.0.1:11434/v1'});
  assert.equal(settings.customProviderId,id);assert.equal(await collect(settings),'Hello');
- assert.equal(seen[0].url,'/v1/chat/completions');assert.equal(seen[0].auth,'Bearer k2');assert.equal(seen[0].body.model,'auto:default');assert.equal(seen[0].body.messages[0].content,'Be concise');
+ assert.equal(seen[0].url,'/v1/chat/completions');assert.equal(seen[0].auth,'Bearer k2');assert.equal(seen[0].body.model,'auto:default');assert.match(seen[0].body.messages[0].content,/^Be concise\n\nYou are running in Gratis through Test provider, using the model "auto:default"\. "auto:default" is an automatic routing choice/);
  assert.throws(()=>validateSettings({provider:'custom',model:'x',baseUrl:'http://127.0.0.1:11434/v1'}),/custom provider/);
 });
 test('custom provider errors name the provider and never echo the key',async t=>{

@@ -6,7 +6,7 @@ export interface MobileCommand {
   kind: "select" | "new" | "send" | "stop" | "model" | "providers" | "voice" | "voice-cancel" | "profile" | "edit-bot" | "create-bot" | "attach" | "preferences" | "delete-bot" | "delete-thread" | "computer" | "user-settings";
   conversationId?: string;
   text?: string;
-  provider?: "claude" | "codex";
+  provider?: string;
   model?: string;
   audioBase64?: string;
   mimeType?: string;
@@ -29,7 +29,8 @@ export function parseMobileCommand(raw: unknown): MobileCommand {
   if (!["new","create-bot"].includes(String(v.kind)) && !v.conversationId) throw new Error("Choose a conversation");
   if (v.kind === "send" && !v.text) throw new Error("Enter a message");
   if(v.kind === "model") {
-    if(!["claude","codex"].includes(String(v.provider)) || typeof v.model !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,199}$/.test(v.model)) throw new Error("Choose a valid subscription model");
+    const custom=/^custom:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(String(v.provider));
+    if((!["claude","codex"].includes(String(v.provider))&&!custom) || typeof v.model !== "string" || !(custom?/^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$/:/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,199}$/).test(v.model)) throw new Error("Choose a valid provider model");
   } else if(v.provider !== undefined || v.model !== undefined) throw new Error("Unexpected model settings");
   if(v.kind === "voice" || v.kind === "voice-cancel") {
     if(typeof v.requestId !== "string" || !/^[-a-f0-9]{36}$/i.test(v.requestId)) throw new Error("Invalid recording");
@@ -53,7 +54,7 @@ export function parseMobileCommand(raw: unknown): MobileCommand {
   if(v.kind==="preferences"){const p=v.preferences as Record<string,unknown>;if(!p||Object.keys(p).some(k=>k!=="appearance")||!["system","light","dark"].includes(String(p.appearance)))throw new Error("Invalid preferences");}else if(v.preferences!==undefined)throw new Error("Unexpected preferences");
   if(v.kind==="computer")validatePhoneComputer(v.computer);else if(v.computer!==undefined)throw new Error("Unexpected computer control");
   if(v.kind==="user-settings")validatePhoneSettings(v.settings);else if(v.settings!==undefined)throw new Error("Unexpected settings");
-  return {...(v.computer?{computer:v.computer as MobileCommand["computer"]}:{}),...(v.settings?{settings:v.settings as MobileCommand["settings"]}:{}),...(v.preferences?{preferences:v.preferences as MobileCommand["preferences"]}:{}),...(v.botId?{botId:v.botId as string}:{}),...(v.profile?{profile:v.profile as MobileCommand["profile"]}:{}),...(v.file?{file:v.file as MobileCommand["file"]}:{}),seq: Number(v.seq), kind: v.kind as MobileCommand["kind"], ...(typeof v.conversationId === "string" ? {conversationId: v.conversationId} : {}), ...(typeof v.text === "string" ? {text: v.text.trim()} : {}), ...(v.kind === "model" ? {provider:v.provider as "claude"|"codex", model:v.model as string}: {}), ...((v.kind === "voice" || v.kind === "voice-cancel") ? {requestId:v.requestId as string}: {}), ...(v.kind === "voice" ? {audioBase64:v.audioBase64 as string,mimeType:v.mimeType as string,send:v.send as boolean}: {})};
+  return {...(v.computer?{computer:v.computer as MobileCommand["computer"]}:{}),...(v.settings?{settings:v.settings as MobileCommand["settings"]}:{}),...(v.preferences?{preferences:v.preferences as MobileCommand["preferences"]}:{}),...(v.botId?{botId:v.botId as string}:{}),...(v.profile?{profile:v.profile as MobileCommand["profile"]}:{}),...(v.file?{file:v.file as MobileCommand["file"]}:{}),seq: Number(v.seq), kind: v.kind as MobileCommand["kind"], ...(typeof v.conversationId === "string" ? {conversationId: v.conversationId} : {}), ...(typeof v.text === "string" ? {text: v.text.trim()} : {}), ...(v.kind === "model" ? {provider:v.provider as string, model:v.model as string}: {}), ...((v.kind === "voice" || v.kind === "voice-cancel") ? {requestId:v.requestId as string}: {}), ...(v.kind === "voice" ? {audioBase64:v.audioBase64 as string,mimeType:v.mimeType as string,send:v.send as boolean}: {})};
 }
 export const mobileCommandSchema = { parse: parseMobileCommand };
 export interface MobileBot {id:string;name:string;avatarShape:string;avatarColor:string;choiceShape:string;choiceColor:string;photo:boolean;pinned:boolean}

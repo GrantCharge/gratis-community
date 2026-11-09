@@ -33,3 +33,24 @@ test('the phone protocol accepts only bounded provider choices',()=>{
  assert.throws(()=>mobileCommand({kind:'send',seq:1,conversationId:'chat',text:'hi',provider:'claude'}));
  assert.throws(()=>mobileCommand({kind:'model',seq:1,conversationId:'chat',provider:'claude',model:'haiku',apiKey:'secret'}));
 });
+test('the phone can choose a custom provider and its model without ever receiving the key',async()=>{
+ const directory=await mkdtemp(join(tmpdir(),'gratis-provider-test-')),service=new ChatService({dataDir:directory,backend:async function*(){yield 'reply';}});
+ const id='11111111-2222-4333-8444-555555555555',many=[{id:'auto',name:'auto'},{id:'auto:quick',name:'auto:quick'},...Array.from({length:60},(_,i)=>({id:`model-${String(i).padStart(2,'0')}`,name:`Model ${i}`}))];
+ const customProviders={snapshot:()=>[{id,label:'FreeLLMAPI',baseUrl:'https://free.example/v1',hasKey:true,apiKey:'never-exported'}],models:async()=>many};
+ try{
+  await service.init();const providers=new MobileProviders({...options,customProviders,settings:()=>service.state.settings}),conversationId=service.state.activeConversationId;
+  const catalog=await providers.refresh(true),entry=catalog.find(p=>p.id===`custom:${id}`);
+  assert.equal(entry.name,'FreeLLMAPI');assert.equal(entry.models.length,30);assert.equal(entry.more,32);
+  await providers.select(service,{conversationId,provider:`custom:${id}`,model:'auto:quick'});
+  assert.equal(service.state.settings.provider,'custom');assert.equal(service.state.settings.customProviderId,id);assert.equal(service.state.settings.model,'auto:quick');
+  await providers.select(service,{conversationId,provider:`custom:${id}`,model:'model-59'});assert.equal(service.state.settings.model,'model-59');
+  const projection=mobileSnapshot(service,conversationId,await providers.refresh(true));
+  assert.equal(projection.selected.provider,`custom:${id}`);assert.equal(projection.selected.model,'model-59');assert.ok(projection.providers.find(p=>p.custom).models.some(m=>m.id==='model-59'));
+  assert.doesNotMatch(JSON.stringify(projection),/never-exported|apiKey|free\.example/);
+  await providers.select(service,{conversationId,provider:'claude',model:'haiku'});assert.equal(service.state.settings.provider,'claude');assert.equal(service.state.settings.customProviderId,undefined);
+  await assert.rejects(providers.select(service,{conversationId,provider:'custom:99999999-2222-4333-8444-555555555555',model:'auto'}),/removed/);
+  assert.equal(mobileCommand({kind:'model',seq:1,conversationId:'chat',provider:`custom:${id}`,model:'deepseek/deepseek-v4:free'}).model,'deepseek/deepseek-v4:free');
+  assert.throws(()=>mobileCommand({kind:'model',seq:1,conversationId:'chat',provider:'custom:not-a-uuid',model:'auto'}));
+  assert.throws(()=>mobileCommand({kind:'model',seq:1,conversationId:'chat',provider:'claude',model:'auto:quick'}));
+ }finally{await service.close();await rm(directory,{recursive:true,force:true});}
+});
