@@ -112,9 +112,7 @@ function render(next) {
   $('settings-button').title = `Settings · ${claude ? 'Claude' : codex?'Codex':custom?customName:local ? 'local AI server' : 'local demo'}`;
   $('chat-model').hidden = !claude&&!codex&&!custom;
   // Name who supplies (and bills) the model, so a Claude model from Command Code isn't mistaken for the Claude plan.
-  const providerName=claude?'Claude plan':codex?'ChatGPT plan':custom?customName:'';
-  $('chat-provider').textContent=providerName;$('chat-provider').hidden=!providerName;
-  $('chat-provider').title=claude?'Uses your Claude subscription':codex?'Uses your ChatGPT (Codex) subscription':custom?`Supplied and billed by ${customName}. Change it in Settings.`:'';
+  const providerName=syncChatProviders();
   $('chat-model').title=providerName?`${providerName} · applies to the next reply`:'Applies to the next reply';
   if(custom&&customModelsFor!==state.settings.customProviderId)void loadCustomModels(state.settings.customProviderId,{quiet:true});
   syncChatModels(bot);
@@ -258,6 +256,35 @@ $('workspace-profile').onclick = () => openSettings();
 $('export-workspace').onclick = () => run(() => api.exportData('workspace'));
 $('share-conversation').onclick = () => run(() => api.exportData('conversation'));
 $('attach-menu').onclick = () => run(()=>api.attachFiles({conversationId:state.activeConversationId}));
+// Header provider switcher: the Claude plan, the ChatGPT plan and each custom provider, each keeping its last model.
+function providerChoice(){const p=state.settings.provider;return p==='custom'?`custom:${state.settings.customProviderId}`:p;}
+function syncChatProviders(){
+ const p=state.settings.provider,select=$('chat-provider'),choices=[{value:'claude',label:'Claude plan',title:'Uses your Claude subscription'},{value:'codex',label:'ChatGPT plan',title:'Uses your ChatGPT (Codex) subscription'},...customCatalog.providers.map(c=>({value:`custom:${c.id}`,label:c.label,title:`Supplied and billed by ${c.label}`}))];
+ const current=providerChoice();if(!choices.some(c=>c.value===current))choices.push(p==='custom'?{value:current,label:customLabel(),title:''}:{value:current,label:p==='local'?'Local AI server':'Local demo',title:p==='local'?'Uses your local AI server':'Scripted demo replies, no AI model'});
+ choices.push({value:'settings',label:'Manage providers…',title:'Add or remove providers in Settings'});
+ select.replaceChildren(...choices.map(c=>{const o=el('option',null,c.label);o.value=c.value;o.title=c.title;if(c.value==='claude')o.dataset.logo='claude';if(c.value==='codex')o.dataset.logo='openai';return o;}));
+ select.value=current;select.hidden=false;select.disabled=isStreaming();
+ const chosen=choices.find(c=>c.value===current);select.title=chosen?`${chosen.title||chosen.label}. Click to switch provider.`:'Choose who supplies replies';
+ return p==='claude'?'Claude plan':p==='codex'?'ChatGPT plan':p==='custom'?customLabel():'';
+}
+async function providerSettings(choice){
+ const remembered=state.settings.providerDefaults||{};
+ if(choice==='claude'){const r=remembered.claude||{};return{provider:'claude',model:['haiku','sonnet','opus'].includes(r.model)?r.model:'sonnet',effort:r.effort||'medium'};}
+ if(choice==='codex'){const r=remembered.codex||{};if(r.model)return{provider:'codex',model:r.model,effort:r.effort||'medium'};await checkCodexConnection();if(!codexConnection?.signedIn)throw new Error('Sign in to ChatGPT in Settings first.');const first=codexModels[0];if(!first)throw new Error('No ChatGPT models are available yet. Check the connection in Settings.');return{provider:'codex',model:first.id,effort:first.defaultEffort||'medium'};}
+ const id=choice.slice('custom:'.length),models=await api.customModels({id}),wanted=remembered[`custom:${id}`]?.model;
+ const model=models.some(m=>m.id===wanted)?wanted:models[0]?.id;if(!model)throw new Error('This provider has no models available. Check it in Settings.');
+ return{provider:'custom',customProviderId:id,model,effort:'medium'};
+}
+$('chat-provider').onchange = async () => {
+  const choice=$('chat-provider').value,previous=providerChoice();
+  if(choice==='settings'){$('chat-provider').value=previous;selects.sync();openSettings();return;}
+  if(choice===previous)return;
+  $('chat-provider').disabled=true;selects.sync();
+  const {customProviderId,...rest}=state.settings;
+  const result=await run(async()=>api.updateSettings({...rest,...await providerSettings(choice)}));
+  if(!result){$('chat-provider').value=previous;$('chat-provider').disabled=false;selects.sync();}
+  else if(result.settings?.provider==='custom')void loadCustomModels(result.settings.customProviderId,{quiet:true});
+};
 $('chat-model').onchange = async () => {
   const previous = state.settings.model;
   // Custom providers have one workspace-wide model; Claude and Codex remember a model per bot.

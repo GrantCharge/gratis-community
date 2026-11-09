@@ -1,5 +1,5 @@
 import test from 'node:test';import assert from 'node:assert/strict';import {mkdtemp,readFile,rm} from 'node:fs/promises';import {join} from 'node:path';import {tmpdir} from 'node:os';import {createServer} from 'node:http';
-import {CustomProviders,customProviderUrl,customModelId} from '../src/custom-providers.mjs';import {streamReply,validateSettings,setCustomProviderLookup} from '../src/backend.mjs';
+import {CustomProviders,customProviderUrl,customModelId} from '../src/custom-providers.mjs';import {streamReply,validateSettings,setCustomProviderLookup} from '../src/backend.mjs';import {ChatService} from '../src/chat-service.mjs';
 const encrypt=s=>Buffer.from(s).map(x=>x^42),decrypt=b=>Buffer.from(b).map(x=>x^42).toString();
 async function store(t,fetchImpl){const directory=await mkdtemp(join(tmpdir(),'gratis-custom-'));t.after(()=>rm(directory,{recursive:true,force:true}));const make=()=>new CustomProviders({directory,encrypt,decrypt,fetchImpl}).init();return{directory,make};}
 const bot={name:'Helper',instructions:'Be concise'};
@@ -48,4 +48,15 @@ test('custom provider errors name the provider and never echo the key',async t=>
  await assert.rejects(collect(settings),e=>/Command Code rejected the API key/.test(e.message)&&!e.message.includes('never-shown'));
  path='limited';await assert.rejects(collect(settings),/rate limiting/);
  setCustomProviderLookup(()=>{const error=new Error('This custom provider was removed. Choose another provider in Settings.');throw error;});await assert.rejects(collect(settings),/removed/);
+});
+test('each custom provider remembers its own last model when switching providers',async t=>{
+ const directory=await mkdtemp(join(tmpdir(),'gratis-custom-switch-'));t.after(()=>rm(directory,{recursive:true,force:true}));
+ const service=new ChatService({dataDir:directory,runtimeFactory:async()=>({}),backend:async function*(){yield 'ok';}});await service.init();t.after(()=>service.close?.());
+ const a='11111111-2222-4333-8444-555555555555',b='66666666-7777-4888-9999-aaaaaaaaaaaa',base=service.state.settings;
+ await service.updateSettings({...base,provider:'custom',customProviderId:a,model:'auto:quick'});
+ await service.updateSettings({...service.state.settings,provider:'custom',customProviderId:b,model:'claude-fable-5'});
+ await service.updateSettings({...service.state.settings,customProviderId:undefined,provider:'claude',model:'opus'});
+ const remembered=service.state.settings.providerDefaults;
+ assert.equal(remembered[`custom:${a}`].model,'auto:quick');assert.equal(remembered[`custom:${b}`].model,'claude-fable-5');assert.equal(remembered.claude.model,'opus');
+ assert.equal(service.state.settings.customProviderId,undefined);
 });
