@@ -1,4 +1,4 @@
-import {mkdir,readFile,writeFile,rename,rm,copyFile} from 'node:fs/promises';
+import {mkdir,readFile,writeFile,rename,rm,copyFile,readdir,access,constants} from 'node:fs/promises';
 import {createHash,randomUUID} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -14,5 +14,8 @@ if(process.platform==='darwin'&&['arm64','x64'].includes(process.arch)){
  const zip=path.join(root,'.cache',`composio-${arch}.zip`);await download(`https://github.com/ComposioHQ/composio/releases/download/%40composio%2Fcli%400.6.0/composio-darwin-${arch}.zip`,zip,sha);
  const entries=execFileSync('unzip',['-Z1',zip],{encoding:'utf8'}).trim().split('\n');if(entries.some(x=>x.startsWith('/')||x.split('/').includes('..')))throw new Error('Unsafe archive path.');
  const staging=path.join(root,'.cache','composio-'+randomUUID());await mkdir(staging,{recursive:true});execFileSync('unzip',['-q',zip,'-d',staging]);
- const destination=path.join(root,'assets/composio-cli');await rm(destination,{recursive:true,force:true});await rename(staging,destination);console.log('Verified Composio CLI installed.');
+ // Composio's archive wraps the client in one top-level folder (composio-darwin-<arch>/); Gratis expects composio-cli/composio.
+ const top=await readdir(staging,{withFileTypes:true}),source=top.length===1&&top[0].isDirectory()?path.join(staging,top[0].name):staging;
+ await access(path.join(source,'composio'),constants.X_OK);
+ const destination=path.join(root,'assets/composio-cli');await rm(destination,{recursive:true,force:true});await rename(source,destination);if(source!==staging)await rm(staging,{recursive:true,force:true});console.log('Verified Composio CLI installed.');
 }else console.log('Composio browser sign-in packaging is currently supported on macOS. API-key setup is available in Settings.');
