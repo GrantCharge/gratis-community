@@ -5,7 +5,7 @@ import {COMPUTER_ACTIONS} from './cloud-computer.mjs';
 import {searchWeb,readWebpage,publicURL} from './web-tools.mjs';
 
 export const defaultCapabilities={web:true,files:true,computer:true,connections:true};
-export async function agentRuntime({bot,conversationId,files,cloud,connections,signal,onActivity,approve,collaboration,memory,t3,schedules,requestComputerHelp,canUseComputer=()=>true}) {
+export async function agentRuntime({bot,conversationId,files,cloud,connections,signal,onActivity,approve,collaboration,memory,t3,schedules,requestComputerHelp,apps:appServers,canUseComputer=()=>true}) {
   const capabilities={...defaultCapabilities,...bot.capabilities},tools=[],definitions=[],mcpServers={};
   const register=(name,description,schema,handler)=>{const wrapped=async input=>{
     const id=crypto.randomUUID();onActivity({id,name,input:name.endsWith('_memory')?{scope:input.scope,query:input.query,manual:true}:traceValue(input),status:'running',startedAt:Date.now()});
@@ -60,5 +60,7 @@ export async function agentRuntime({bot,conversationId,files,cloud,connections,s
   }
   if(tools.length)mcpServers.gratis=createSdkMcpServer({name:'gratis',version:'1.0.0',tools});
   if(capabilities.connections&&connections.status().composio)mcpServers.composio=await connections.mcp();
-  return {mcpServers,definitions,onActivity,collaboration,memory,t3,schedules,web:capabilities.web,capabilities,workspaceRoot:files.root(bot.id),approve,signature:JSON.stringify({capabilities,participants:collaboration?.members.map(m=>m.id),memory:!!memory,schedules:!!schedules,cloud:connections.status().cloud,composio:connections.status().composio,t3:t3?.binding})};
+  // Your own MCP apps follow the same per-bot "connected apps" switch as Composio.
+  const own=capabilities.connections&&appServers?appServers.runtime():{servers:{},apps:[]};Object.assign(mcpServers,own.servers);
+  return {mcpServers,apps:own.apps,definitions,onActivity,collaboration,memory,t3,schedules,web:capabilities.web,capabilities,workspaceRoot:files.root(bot.id),approve,signature:JSON.stringify({capabilities,apps:own.apps,participants:collaboration?.members.map(m=>m.id),memory:!!memory,schedules:!!schedules,cloud:connections.status().cloud,composio:connections.status().composio,t3:t3?.binding})};
 }

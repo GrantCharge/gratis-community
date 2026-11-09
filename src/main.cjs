@@ -16,7 +16,7 @@ const humanComputers=new Set(),computerControlEpochs=new Map(),computerControlRe
 function setHumanControl(id,human){if(humanComputers.has(id)!==human){human?humanComputers.add(id):humanComputers.delete(id);computerControlRevisions.set(id,(computerControlRevisions.get(id)||0)+1);}}
 const controlState=value=>({...value,control:humanComputers.has(value.conversationId)?'human':'bot',controlRevision:computerControlRevisions.get(value.conversationId)||0});
 const computerSnapshot=id=>{const snapshot=cloud.snapshot(id);return {...snapshot,state:controlState(snapshot.state)};};
-let window, service, connections, customProviders, files, cloud, signIn, memory, t3Environments, t3Tasks, t3Host, t3Installing = '', schedules, mobile, mobileProviders, mobileDictation, computerControl, mobileComputer, closing = false, finishDraftFlush, voiceTask;
+let window, service, connections, customProviders, appServers, files, cloud, signIn, memory, t3Environments, t3Tasks, t3Host, t3Installing = '', schedules, mobile, mobileProviders, mobileDictation, computerControl, mobileComputer, closing = false, finishDraftFlush, voiceTask;
 app.on('activate',()=>{if(window&&!window.isDestroyed()){window.show();window.focus();}});
 app.on('second-instance', () => { if (window && !window.isDestroyed()) { window.show(); window.focus(); } });
 async function shutdown() {
@@ -31,7 +31,7 @@ async function shutdown() {
   }
   const activeVoice = voiceTask;
   activeVoice?.controller.abort(new DOMException('App closed', 'AbortError'));
-  try { mobileComputer?.close(); await mobileDictation?.close(); await mobile?.close(); await activeVoice?.promise?.catch(() => {}); await signIn?.cancel({preserve:true}); await schedules?.close(); await t3Tasks?.close(); await t3Environments?.close(); await service?.close(); await customProviders?.close(); await cloud?.close(); } finally { app.exit(0); }
+  try { mobileComputer?.close(); await mobileDictation?.close(); await mobile?.close(); await activeVoice?.promise?.catch(() => {}); await signIn?.cancel({preserve:true}); await schedules?.close(); await t3Tasks?.close(); await t3Environments?.close(); await service?.close(); await customProviders?.close(); await appServers?.close(); await cloud?.close(); } finally { app.exit(0); }
 }
 const actions = ['createBot', 'deleteBot', 'selectBot', 'newConversation', 'selectConversation', 'setDraft',
   'createThread','renameThread','updateThreadMembers','pinThread','deleteThread','updateSettings', 'updateBot', 'duplicateBot', 'respondApproval', 'updateQueue', 'send', 'stop', 'retry'];
@@ -57,6 +57,7 @@ app.whenReady().then(async () => {
   const {CustomProviders,CUSTOM_PROVIDER_PRESETS}=await import('./custom-providers.mjs');
   customProviders=await new CustomProviders({directory:dataDir,encrypt:connections.encrypt,decrypt:connections.decrypt,onChange:()=>void mobileProviders?.refresh(true).catch(()=>{})}).init();
   (await import('./backend.mjs')).setCustomProviderLookup(id=>customProviders.get(id));
+  appServers=await new (await import('./mcp-servers.mjs')).McpServers({directory:dataDir,encrypt:connections.encrypt,decrypt:connections.decrypt}).init();
   connections.onChange=()=>{if(window&&!window.isDestroyed())window.webContents.send('orbit:connections-changed');};
   const [{T3Environments,LEGACY_ENVIRONMENT},{T3Tasks,t3TaskActive},{T3LocalHost}]=await Promise.all([import('./t3-environments.mjs'),import('./t3-tasks.mjs'),import('./t3-local.mjs')]);
   const t3Changed=()=>{if(window&&!window.isDestroyed())window.webContents.send('orbit:t3-changed');};
@@ -90,7 +91,7 @@ app.whenReady().then(async () => {
         ...retained.map(async seat=>{if(connections.status().cloud&&(humanComputers.has(seat.conversationId)||cloud.serverOwners.get(seat.conversationId))){await cloud.whenIdle(seat.conversationId);await cloud.control(seat.botId,seat.conversationId,false);}setHumanControl(seat.conversationId,false);if(window&&!window.isDestroyed())window.webContents.send('orbit:computer-state',computerSnapshot(seat.conversationId).state);}),
       ]);
       if(results.some(r=>r.status==='rejected'))throw new Error('Could not finish stopping a group computer. Your member changes have not been saved. Try again.');
-    },runtimeFactory:args=>agentRuntime({...args,files,cloud,connections,canUseComputer:()=>!humanComputers.has(args.conversationId),t3:t3Agent(args),schedules:scheduleAgent(args)}) });
+    },runtimeFactory:args=>agentRuntime({...args,files,cloud,connections,apps:appServers,canUseComputer:()=>!humanComputers.has(args.conversationId),t3:t3Agent(args),schedules:scheduleAgent(args)}) });
   await service.init();
   await (await import('./edition-setup.mjs')).applyEdition(service,edition);
   const {Schedules}=await import('./schedules.mjs');
@@ -214,6 +215,11 @@ app.whenReady().then(async () => {
   ipcMain.handle('orbit:custom-provider-add', (e,value)=>{authorized(e);return customProviders.add({label:value?.label,baseUrl:value?.baseUrl,apiKey:value?.apiKey});});
   ipcMain.handle('orbit:custom-provider-update', (e,value)=>{authorized(e);return customProviders.update({id:value?.id,label:value?.label,baseUrl:value?.baseUrl,apiKey:value?.apiKey});});
   ipcMain.handle('orbit:custom-provider-remove', (e,value)=>{authorized(e);const settings=service.state.settings;if(settings.provider==='custom'&&settings.customProviderId===value?.id)throw new Error('Choose another AI provider in Settings before removing this one.');return customProviders.remove({id:value?.id});});
+  ipcMain.handle('orbit:mcp-servers', e=>{authorized(e);return appServers.snapshot();});
+  ipcMain.handle('orbit:mcp-server-add', (e,value)=>{authorized(e);return appServers.add({label:value?.label,url:value?.url,token:value?.token,ask:value?.ask});});
+  ipcMain.handle('orbit:mcp-server-update', (e,value)=>{authorized(e);return appServers.update({id:value?.id,label:value?.label,url:value?.url,token:value?.token,enabled:value?.enabled,ask:value?.ask});});
+  ipcMain.handle('orbit:mcp-server-remove', (e,value)=>{authorized(e);return appServers.remove({id:value?.id});});
+  ipcMain.handle('orbit:mcp-server-test', (e,value)=>{authorized(e);return appServers.test(value?.id);});
   ipcMain.handle('orbit:custom-models', (e,value)=>{authorized(e);return customProviders.models(value?.id,{force:!!value?.force});});
   ipcMain.handle('orbit:codex-status', async e=>{authorized(e);return (await import('./codex-client.mjs')).getCodexStatus();});
   ipcMain.handle('orbit:codex-models', async e=>{authorized(e);return (await import('./codex-client.mjs')).getCodexModels();});
